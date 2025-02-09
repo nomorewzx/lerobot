@@ -727,7 +727,7 @@ class FeetechMotorsBusV2:
         models = []
         for name in motor_names:
             group = self.motor_groups[name]
-            # Sort the group by motor index, so that the primary motor (higher index) is last
+            # Sort the group by motor index, so that the primary motor (higher index) is first
             sorted_group = sorted(group, key=lambda x: x[0])
             motor_idx, model = sorted_group[0]  # Take the primary motor
             motor_ids.append(motor_idx)
@@ -843,36 +843,35 @@ class FeetechMotorsBusV2:
         motor_ids = []
         models = []
 
+        if data_name in CALIBRATION_REQUIRED and self.calibration is not None:
+            values = self.revert_calibration(values, motor_names)
+
         secondary_motor_ids = []
         secondary_values = []
+        secondary_models = []
 
         for name, value in zip(motor_names, values, strict=True):
-            group = self.motor_groups[name]
-            if len(group) == 2:
-                primary_idx, primary_model = max(group, key=lambda x: x[0])
-                secondary_idx, secondary_model = min(group, key=lambda x: x[0])
+            motor_group = self.motor_groups[name]
+            if len(name) == 2:
+                primary_idx, primary_model = max(motor_group, key=lambda x: x[0])
+                secondary_idx, secondary_model = min(motor_group, key=lambda x: x[0])
                 motor_ids.append(primary_idx)
                 models.append(primary_model)
 
                 secondary_motor_ids.append(secondary_idx)
-                secondary_values.append(value)
+                secondary_values.append(4095 - value)
+                secondary_models.append(secondary_model)
             else:
-                motor_idx, model = group[0]
+                motor_idx, model = motor_group[0]
                 motor_ids.append(motor_idx)
                 models.append(model)
-
-        if data_name in CALIBRATION_REQUIRED and self.calibration is not None:
-            values = self.revert_calibration(values, motor_names)
-            # pending verification
-            if secondary_values:
-                secondary_values = self.revert_calibration(secondary_values, motor_names)
-
+        
         values = values.tolist()
         if secondary_values:
             secondary_values = secondary_values.tolist()
 
-        assert_same_address(self.model_ctrl_table, models, data_name)
-        addr, bytes = self.model_ctrl_table[model][data_name]
+        assert_same_address(self.model_ctrl_table, models + secondary_models, data_name)
+        addr, bytes = self.model_ctrl_table[models[0]][data_name]
         group_key = get_group_sync_key(data_name, motor_names)
 
         init_group = data_name not in self.group_readers
