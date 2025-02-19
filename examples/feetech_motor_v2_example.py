@@ -1,4 +1,4 @@
-from lerobot.common.robot_devices.motors import feetech_dual_motor_joint
+from lerobot.common.robot_devices.motors import feetech_motor_pingti
 import time
 
 port_number = '/dev/tty.usbmodem58A60699971'
@@ -10,7 +10,7 @@ SECONDARY_ID = 3
 
 motor_groups={"shoulder_lit": [(PRIMARY_ID, motor_model), (SECONDARY_ID, motor_model)]}
 
-dual_motor_joint_bus = feetech_dual_motor_joint.FeetechMotorsBusV2(port=port_number, motor_groups=motor_groups)
+dual_motor_joint_bus = feetech_motor_pingti.FeetechMotorsBusV2(port=port_number, motor_groups=motor_groups)
 dual_motor_joint_bus.connect()
 
 primary_present_position = dual_motor_joint_bus.read_with_motor_ids([motor_model], [PRIMARY_ID], 'Present_Position')

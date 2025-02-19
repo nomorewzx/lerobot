@@ -1,4 +1,4 @@
-from lerobot.common.robot_devices.motors import feetech_dual_motor_joint
+from lerobot.common.robot_devices.motors import feetech_motor_pingti
 import time
 
 port_number = '/dev/tty.usbmodem58A60699971'
@@ -21,7 +21,7 @@ motor_groups={
     "elbow_lift": [(ELBOW_LIFT_PRIMARY_ID, motor_model), (ELBOW_LIFT_SECONDARY_ID, motor_model)]
 }
 
-dual_motor_joint_bus = feetech_dual_motor_joint.FeetechMotorsBusV2(port=port_number, motor_groups=motor_groups)
+dual_motor_joint_bus = feetech_motor_pingti.FeetechMotorsBusV2(port=port_number, motor_groups=motor_groups)
 dual_motor_joint_bus.connect()
 
 values = dual_motor_joint_bus.read('Present_Position')
@@ -41,7 +41,7 @@ if CURRENT_CONTROL_MODE == DUAL_SERVO_JOINT_CONTROL_MODES[1]:
     primary_target_degree = 300
     print('primary target degree.....', primary_target_degree)
 
-    primary_target_positions = feetech_dual_motor_joint.convert_degrees_to_steps(primary_target_degree, ['sts3215'])
+    primary_target_positions = feetech_motor_pingti.convert_degrees_to_steps(primary_target_degree, ['sts3215'])
 
     primary_target_position = primary_target_positions[0]
     secondary_target_position = 4095 - primary_target_position

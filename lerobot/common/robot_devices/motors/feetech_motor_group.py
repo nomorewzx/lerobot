@@ -230,12 +230,12 @@ class JointOutOfRangeError(Exception):
         super().__init__(self.message)
 
 
-class FeetechMotorsBusV2:
+class FeetechMotorGroupsBus:
     """
-    The FeetechMotorsBus class allows to efficiently read and write to the attached motors. It relies on
+    The FeetechMotorGroupsBus class allows to efficiently read and write to the attached motor groups. It relies on
     the python feetech sdk to communicate with the motors. For more info, see the [feetech SDK Documentation](https://emanual.robotis.com/docs/en/software/feetech/feetech_sdk/sample_code/python_read_write_protocol_2_0/#python-read-write-protocol-20).
 
-    A FeetechMotorsBus instance requires a port (e.g. `FeetechMotorsBus(port="/dev/tty.usbmodem575E0031751"`)).
+    A FeetechMotorGroupsBus instance requires a port (e.g. `FeetechDualMotorsBus(port="/dev/tty.usbmodem575E0031751"`)).
     To find the port, you can run our utility script:
     ```bash
     python lerobot/scripts/find_motors_bus_port.py
@@ -246,26 +246,27 @@ class FeetechMotorsBusV2:
     >>> Reconnect the usb cable.
     ```
 
-    Example of usage for 1 motor connected to the bus:
+    Example of usage for 2 motors as a motor group to drive a single joint:
     ```python
-    motor_name = "gripper"
-    motor_index_1 = 5
-    motor_index_2 = 6
+    motor_group_name = "shoulder_pitch"
+    primary_motor_idx = 1
+    secondary_motor_idx = 2
     motor_model = "sts3215"
 
-    motors_bus = FeetechMotorsBusV2(
+    motors_bus = FeetechMotorGroupsBus(
         port="/dev/tty.usbmodem575E0031751",
-        motor_groups={motor_name: [(motor_index_1, motor_model),(motor_index_2, motor_model)]},
+        motor_groups={motor_group_name: [(primary_motor_idx, motor_model),(secondary_motor_idx, motor_model)]},
     )
     motors_bus.connect()
 
     # position is an array with length of motor groups. 
     # If a group contains 2 motors, the value is the position value of primary motor (first motor)
-    position = motors_bus.read("Present_Position")
+    position = motors_bus.read("Present_Position") # return array with length 1
 
     # move from a few motor steps as an example
+    # The move of secondary motor of the motor group will be handled inside write function
     few_steps = 30
-    motors_bus.write("Goal_Position", position + few_steps)
+    motors_bus.write("Goal_Position", position + few_steps) 
 
     # when done, consider disconnecting
     motors_bus.disconnect()
@@ -819,7 +820,7 @@ class FeetechMotorsBusV2:
     def write(self, data_name, values: int | float | np.ndarray, motor_names: str | list[str] | None = None):
         if not self.is_connected:
             raise RobotDeviceNotConnectedError(
-                f"FeetechMotorsBus({self.port}) is not connected. You need to run `motors_bus.connect()`."
+                f"FeetechMotorGroupsBus({self.port}) is not connected. You need to run `motors_bus.connect()`."
             )
 
         start_time = time.perf_counter()
@@ -852,23 +853,24 @@ class FeetechMotorsBusV2:
 
         for name, value in zip(motor_names, values, strict=True):
             motor_group = self.motor_groups[name]
-            if len(name) == 2:
-                primary_idx, primary_model = max(motor_group, key=lambda x: x[0])
-                secondary_idx, secondary_model = min(motor_group, key=lambda x: x[0])
+            if len(motor_group) == 2:
+                print(f'-------------Found dual motor groups: {name}--------------')
+                primary_idx, primary_model = min(motor_group, key=lambda x: x[0])
+                secondary_idx, secondary_model = max(motor_group, key=lambda x: x[0])
                 motor_ids.append(primary_idx)
                 models.append(primary_model)
 
                 secondary_motor_ids.append(secondary_idx)
                 secondary_values.append(4095 - value)
                 secondary_models.append(secondary_model)
+                print('Primary Motor Value:', value)
+                print('Secondary Motor Value:', 4095 - value)
             else:
                 motor_idx, model = motor_group[0]
                 motor_ids.append(motor_idx)
                 models.append(model)
         
         values = values.tolist()
-        if secondary_values:
-            secondary_values = secondary_values.tolist()
 
         assert_same_address(self.model_ctrl_table, models + secondary_models, data_name)
         addr, bytes = self.model_ctrl_table[models[0]][data_name]
