@@ -229,7 +229,7 @@ class ManipulatorRobot:
 
         if self.robot_type in ["koch", "koch_bimanual", "aloha"]:
             from lerobot.common.robot_devices.motors.dynamixel import TorqueMode
-        elif self.robot_type in ["so100", "moss"]:
+        elif self.robot_type in ["so100", "moss", "pingti"]:
             from lerobot.common.robot_devices.motors.feetech import TorqueMode
 
         # We assume that at connection time, arms are in a rest position, and torque can
@@ -248,6 +248,8 @@ class ManipulatorRobot:
             self.set_aloha_robot_preset()
         elif self.robot_type in ["so100", "moss"]:
             self.set_so100_robot_preset()
+        elif self.robot_type in ["pingti"]:
+            self.set_pingti_robot_preset()
 
         # Enable torque on all motors of the follower arms
         for name in self.follower_arms:
@@ -299,13 +301,12 @@ class ManipulatorRobot:
 
                     calibration = run_arm_calibration(arm, self.robot_type, name, arm_type)
 
-                elif self.robot_type in ["so100", "moss"]:
+                elif self.robot_type in ["so100", "moss", "pingti"]:
                     from lerobot.common.robot_devices.robots.feetech_calibration import (
                         run_arm_manual_calibration,
                     )
 
                     calibration = run_arm_manual_calibration(arm, self.robot_type, name, arm_type)
-
                 print(f"Calibration is done! Saving calibration file '{arm_calib_path}'")
                 arm_calib_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(arm_calib_path, "w") as f:
@@ -427,6 +428,24 @@ class ManipulatorRobot:
             # the motors. Note: this configuration is not in the official STS3215 Memory Table
             self.follower_arms[name].write("Maximum_Acceleration", 254)
             self.follower_arms[name].write("Acceleration", 254)
+
+    def set_pingti_robot_preset(self):
+        for name in self.follower_arms:
+            # Mode=0 for Position Control
+            self.follower_arms[name].write("Mode", 0)
+            # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
+            self.follower_arms[name].write("P_Coefficient", 16)
+            # Set I_Coefficient and D_Coefficient to default value 0 and 32
+            self.follower_arms[name].write("I_Coefficient", 0)
+            self.follower_arms[name].write("D_Coefficient", 32)
+            # Close the write lock so that Maximum_Acceleration gets written to EPROM address,
+            # which is mandatory for Maximum_Acceleration to take effect after rebooting.
+            self.follower_arms[name].write("Lock", 0)
+            # Set Maximum_Acceleration to 254 to speedup acceleration and deceleration of
+            # the motors. Note: this configuration is not in the official STS3215 Memory Table
+            self.follower_arms[name].write("Maximum_Acceleration", 254)
+            self.follower_arms[name].write("Acceleration", 254)
+    
 
     def teleop_step(
         self, record_data=False

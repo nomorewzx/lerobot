@@ -8,6 +8,7 @@ from typing import List
 
 import numpy as np
 import tqdm
+from lerobot.common.robot_devices.motors.configs import FeetechMotorGroupsBusConfig
 
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
 from lerobot.common.utils.utils import capture_timestamp_utc
@@ -101,7 +102,7 @@ SCS_SERIES_BAUDRATE_TABLE = {
 
 CALIBRATION_REQUIRED = ["Goal_Position", "Present_Position"]
 CONVERT_UINT32_TO_INT32_REQUIRED = ["Goal_Position", "Present_Position"]
-
+MIRROR_VALUE_REQUIRED = ['Goal_Position']
 
 MODEL_CONTROL_TABLE = {
     "scs_series": SCS_SERIES_CONTROL_TABLE,
@@ -248,14 +249,14 @@ class FeetechMotorGroupsBus:
 
     Example of usage for 2 motors as a motor group to drive a single joint:
     ```python
-    motor_group_name = "shoulder_pitch"
+    motor_name = "shoulder_pitch"
     primary_motor_idx = 1
     secondary_motor_idx = 2
     motor_model = "sts3215"
 
     motors_bus = FeetechMotorGroupsBus(
         port="/dev/tty.usbmodem575E0031751",
-        motor_groups={motor_group_name: [(primary_motor_idx, motor_model),(secondary_motor_idx, motor_model)]},
+        motors={motor_name: [(primary_motor_idx, motor_model),(secondary_motor_idx, motor_model)]},
     )
     motors_bus.connect()
 
@@ -275,24 +276,16 @@ class FeetechMotorGroupsBus:
 
     def __init__(
         self,
-        port: str,
-        motor_groups: dict[str, List[tuple[int, str]]],
-        extra_model_control_table: dict[str, list[tuple]] | None = None,
-        extra_model_resolution: dict[str, int] | None = None,
-        mock=False,
+        config: FeetechMotorGroupsBusConfig,
     ):
-        self.port = port
-        self.motor_groups = motor_groups
-        self.mock = mock
+        self.port = config.port
+        self.motors = config.motors
+        self.mock = config.mock
 
         self.model_ctrl_table = deepcopy(MODEL_CONTROL_TABLE)
-        if extra_model_control_table:
-            self.model_ctrl_table.update(extra_model_control_table)
-
+        
         self.model_resolution = deepcopy(MODEL_RESOLUTION)
-        if extra_model_resolution:
-            self.model_resolution.update(extra_model_resolution)
-
+        
         self.port_handler = None
         self.packet_handler = None
         self.calibration = None
@@ -386,20 +379,19 @@ class FeetechMotorGroupsBus:
 
     @property
     def motor_names(self) -> list[str]:
-        return list(self.motor_groups.keys())
+        return list(self.motors.keys())
 
     @property
     def motor_models(self) -> list[str]:
         all_motor_models = []
-        for _, motor_group in self.motor_groups.items():
-            for motor in motor_group:
-                all_motor_models.append(motor[1])
+        for _, motor_group in self.motors.items():
+            all_motor_models.append(motor_group[0][1])
         return all_motor_models
 
     @property
     def motor_indices(self) -> list[int]:
         all_motor_indices = []
-        for _, motor_group in self.motor_groups.items():
+        for _, motor_group in self.motors.items():
             for motor in motor_group:
                 all_motor_indices.append(motor[0])
         return all_motor_indices
@@ -447,7 +439,8 @@ class FeetechMotorGroupsBus:
             if CalibrationMode[calib_mode] == CalibrationMode.DEGREE:
                 drive_mode = self.calibration["drive_mode"][calib_idx]
                 homing_offset = self.calibration["homing_offset"][calib_idx]
-                _, model = self.motors[name]
+                model_group = self.motors[name]
+                model = model_group[0][1]
                 resolution = self.model_resolution[model]
 
                 # Update direction of rotation of the motor to match between leader and follower.
@@ -526,7 +519,8 @@ class FeetechMotorGroupsBus:
             if CalibrationMode[calib_mode] == CalibrationMode.DEGREE:
                 drive_mode = self.calibration["drive_mode"][calib_idx]
                 homing_offset = self.calibration["homing_offset"][calib_idx]
-                _, model = self.motors[name]
+                model_group = self.motors[name]
+                model = model_group[0][1]
                 resolution = self.model_resolution[model]
 
                 if drive_mode:
@@ -603,7 +597,8 @@ class FeetechMotorGroupsBus:
             if CalibrationMode[calib_mode] == CalibrationMode.DEGREE:
                 drive_mode = self.calibration["drive_mode"][calib_idx]
                 homing_offset = self.calibration["homing_offset"][calib_idx]
-                _, model = self.motors[name]
+                model_group = self.motors[name]
+                model = model_group[0][1]
                 resolution = self.model_resolution[model]
 
                 # Convert from nominal 0-centered degree range [-180, 180] to
@@ -727,7 +722,7 @@ class FeetechMotorGroupsBus:
         motor_ids = []
         models = []
         for name in motor_names:
-            group = self.motor_groups[name]
+            group = self.motors[name]
             # Sort the group by motor index, so that the primary motor (higher index) is first
             sorted_group = sorted(group, key=lambda x: x[0])
             motor_idx, model = sorted_group[0]  # Take the primary motor
@@ -841,38 +836,40 @@ class FeetechMotorGroupsBus:
 
         values = np.array(values)
 
-        motor_ids = []
         models = []
 
         if data_name in CALIBRATION_REQUIRED and self.calibration is not None:
             values = self.revert_calibration(values, motor_names)
 
-        secondary_motor_ids = []
-        secondary_values = []
-        secondary_models = []
+        all_motor_values = []
+        all_motor_ids = []
 
         for name, value in zip(motor_names, values, strict=True):
-            motor_group = self.motor_groups[name]
+            motor_group = self.motors[name]
             if len(motor_group) == 2:
                 print(f'-------------Found dual motor groups: {name}--------------')
                 primary_idx, primary_model = min(motor_group, key=lambda x: x[0])
                 secondary_idx, secondary_model = max(motor_group, key=lambda x: x[0])
-                motor_ids.append(primary_idx)
-                models.append(primary_model)
+                all_motor_ids.append(primary_idx)
+                all_motor_values.append(value)
 
-                secondary_motor_ids.append(secondary_idx)
-                secondary_values.append(4095 - value)
-                secondary_models.append(secondary_model)
-                print('Primary Motor Value:', value)
-                print('Secondary Motor Value:', 4095 - value)
+                all_motor_ids.append(secondary_idx)
+                if data_name in MIRROR_VALUE_REQUIRED:
+                    all_motor_values.append(4095 - value)
+                else:
+                    all_motor_values.append(value)
+
+                models.append(primary_model)
+                models.append(secondary_model)
             else:
                 motor_idx, model = motor_group[0]
-                motor_ids.append(motor_idx)
+                all_motor_ids.append(motor_idx)
+                all_motor_values.append(value)
                 models.append(model)
         
         values = values.tolist()
 
-        assert_same_address(self.model_ctrl_table, models + secondary_models, data_name)
+        assert_same_address(self.model_ctrl_table, models, data_name)
         addr, bytes = self.model_ctrl_table[models[0]][data_name]
         group_key = get_group_sync_key(data_name, motor_names)
 
@@ -881,22 +878,15 @@ class FeetechMotorGroupsBus:
             self.group_writers[group_key] = scs.GroupSyncWrite(
                 self.port_handler, self.packet_handler, addr, bytes
             )
-
-        for idx, value in zip(motor_ids, values, strict=True):
+        print('Moving position for motors', all_motor_ids)
+        print('Motors Goal Position', all_motor_values)
+        
+        for idx, value in zip(all_motor_ids, all_motor_values, strict=True):
             data = convert_to_bytes(value, bytes, self.mock)
             if init_group:
                 self.group_writers[group_key].addParam(idx, data)
             else:
                 self.group_writers[group_key].changeParam(idx, data)
-
-        if secondary_motor_ids:
-            for idx, value in zip(secondary_motor_ids, secondary_values, strict=True):
-                data = convert_to_bytes(value, bytes, self.mock)
-                if init_group:
-                    self.group_writers[group_key].addParam(idx, data)
-                else:
-                    self.group_writers[group_key].changeParam(idx, data)
-
 
         comm = self.group_writers[group_key].txPacket()
         if comm != scs.COMM_SUCCESS:

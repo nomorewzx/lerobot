@@ -5,7 +5,7 @@ port_number = '/dev/tty.usbmodem58A60699971'
 
 motor_model = 'sts3215'
 
-
+BASE_YAW_ID = 1
 SHOULDER_LIFT_PRIMARY_ID = 2
 SHOULDER_LIFT_SECONDARY_ID = 3
 
@@ -21,15 +21,17 @@ motor_groups={
 dual_motor_joint_bus = feetech_motor_group.FeetechMotorGroupsBus(port=port_number, motor_groups=motor_groups)
 dual_motor_joint_bus.connect()
 
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_PRIMARY_ID], "Minimum_Startup_Force", [16])
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_SECONDARY_ID], "Minimum_Startup_Force", [16])
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_PRIMARY_ID], "Minimum_Startup_Force", [16])
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_SECONDARY_ID], "Minimum_Startup_Force", [16])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [BASE_YAW_ID], "Minimum_Startup_Force", [5])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_PRIMARY_ID], "Minimum_Startup_Force", [10])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_SECONDARY_ID], "Minimum_Startup_Force", [10])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_PRIMARY_ID], "Minimum_Startup_Force", [10])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_SECONDARY_ID], "Minimum_Startup_Force", [10])
 
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_PRIMARY_ID], "P_Coefficient", [16])
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_SECONDARY_ID], "P_Coefficient", [16])
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_PRIMARY_ID], "P_Coefficient", [16])
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_SECONDARY_ID], "P_Coefficient", [16])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [BASE_YAW_ID], "P_Coefficient", [6])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_PRIMARY_ID], "P_Coefficient", [8])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [SHOULDER_LIFT_SECONDARY_ID], "P_Coefficient", [8])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_PRIMARY_ID], "P_Coefficient", [10])
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [ELBOW_LIFT_SECONDARY_ID], "P_Coefficient", [10])
 
 
 values = dual_motor_joint_bus.read('Present_Position')
@@ -39,8 +41,10 @@ print(values)
 
 new_position = values.copy()
 
-# new_position[1] = new_position[1] + 200
-new_position[2] = new_position[2] + 200
+new_position[0] = new_position[0] - 200
+new_position[1] = new_position[1] + 200
+new_position[2] = new_position[2] - 400
+
 print('write.....', new_position)
 dual_motor_joint_bus.write('Goal_Position', new_position)
 

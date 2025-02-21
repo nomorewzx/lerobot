@@ -1,5 +1,6 @@
 import abc
 from dataclasses import dataclass
+from typing import List
 
 import draccus
 
@@ -24,4 +25,11 @@ class DynamixelMotorsBusConfig(MotorsBusConfig):
 class FeetechMotorsBusConfig(MotorsBusConfig):
     port: str
     motors: dict[str, tuple[int, str]]
+    mock: bool = False
+
+@MotorsBusConfig.register_subclass("feetech_group")
+@dataclass
+class FeetechMotorGroupsBusConfig(MotorsBusConfig):
+    port: str
+    motors: dict[str, List[tuple[int, str]]]
     mock: bool = False
