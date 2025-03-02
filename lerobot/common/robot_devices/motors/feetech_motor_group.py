@@ -847,7 +847,6 @@ class FeetechMotorGroupsBus:
         for name, value in zip(motor_names, values, strict=True):
             motor_group = self.motors[name]
             if len(motor_group) == 2:
-                print(f'-------------Found dual motor groups: {name}--------------')
                 primary_idx, primary_model = min(motor_group, key=lambda x: x[0])
                 secondary_idx, secondary_model = max(motor_group, key=lambda x: x[0])
                 all_motor_ids.append(primary_idx)
@@ -878,8 +877,8 @@ class FeetechMotorGroupsBus:
             self.group_writers[group_key] = scs.GroupSyncWrite(
                 self.port_handler, self.packet_handler, addr, bytes
             )
-        print('Moving position for motors', all_motor_ids)
-        print('Motors Goal Position', all_motor_values)
+        print('===============================================================')
+        print(f'FeetechGroupMotorBus: Write {data_name} for motors {all_motor_ids}, the vlaue is {all_motor_values}')
         
         for idx, value in zip(all_motor_ids, all_motor_values, strict=True):
             data = convert_to_bytes(value, bytes, self.mock)

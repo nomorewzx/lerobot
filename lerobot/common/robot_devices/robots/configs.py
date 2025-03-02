@@ -492,7 +492,7 @@ class PingTiRobotConfig(ManipulatorRobotConfig):
     leader_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbserial-A50285BI",
+                port="/dev/tty.usbmodem58A60699971",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [1, "sts3215"],
@@ -509,7 +509,7 @@ class PingTiRobotConfig(ManipulatorRobotConfig):
     follower_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorGroupsBusConfig( 
-                port="/dev/tty.usbmodem58A60699971",
+                port="/dev/tty.usbserial-A50285BI",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [(1, "scs_series")],

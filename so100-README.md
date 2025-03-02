@@ -147,3 +147,30 @@ python lerobot/scripts/train.py \
   hydra.job.name=act_so100_test \
   device=mps \
   wandb.enable=false
+
+
+
+### PingTi
+
+#### Calibration
+
+**Follower Arm**
+python lerobot/scripts/control_robot.py \
+  --robot.type=pingti \
+  --robot.cameras='{}' \
+  --control.type=calibrate \
+  --control.arms='["main_follower"]'
+
+**Leader Arm**
+python lerobot/scripts/control_robot.py \
+  --robot.type=pingti \
+  --robot.cameras='{}' \
+  --control.type=calibrate \
+  --control.arms='["main_leader"]'
+
+##### Teleoperate
+python lerobot/scripts/control_robot.py \
+  --robot.type=pingti \
+  --robot.cameras='{}' \
+  --control.type=teleoperate \
+  --control.fps=30 \

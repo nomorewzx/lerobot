@@ -426,7 +426,7 @@ class ManipulatorRobot:
             self.follower_arms[name].write("Lock", 0)
             # Set Maximum_Acceleration to 254 to speedup acceleration and deceleration of
             # the motors. Note: this configuration is not in the official STS3215 Memory Table
-            self.follower_arms[name].write("Maximum_Acceleration", 254)
+            self.follower_arms[name].write("Maximum_Acceleration", 125)
             self.follower_arms[name].write("Acceleration", 254)
 
     def set_pingti_robot_preset(self):
@@ -437,13 +437,13 @@ class ManipulatorRobot:
             self.follower_arms[name].write("P_Coefficient", 16)
             # Set I_Coefficient and D_Coefficient to default value 0 and 32
             self.follower_arms[name].write("I_Coefficient", 0)
-            self.follower_arms[name].write("D_Coefficient", 32)
+            self.follower_arms[name].write("D_Coefficient", 0)
             # Close the write lock so that Maximum_Acceleration gets written to EPROM address,
             # which is mandatory for Maximum_Acceleration to take effect after rebooting.
             self.follower_arms[name].write("Lock", 0)
             # Set Maximum_Acceleration to 254 to speedup acceleration and deceleration of
             # the motors. Note: this configuration is not in the official STS3215 Memory Table
-            self.follower_arms[name].write("Maximum_Acceleration", 254)
+            self.follower_arms[name].write("Maximum_Acceleration", 125)
             self.follower_arms[name].write("Acceleration", 254)
     
 
@@ -468,6 +468,8 @@ class ManipulatorRobot:
         for name in self.follower_arms:
             before_fwrite_t = time.perf_counter()
             goal_pos = leader_pos[name]
+            print('+++++++++++++++++++++++++++++++')
+            print('Leader pos:', goal_pos)
 
             # Cap goal position when too far away from present position.
             # Slower fps expected due to reading from the follower.
@@ -480,6 +482,8 @@ class ManipulatorRobot:
             follower_goal_pos[name] = goal_pos
 
             goal_pos = goal_pos.numpy().astype(np.int32)
+            print('+++++++++++++++++++++++++++++++++++++++++')
+            print('Follower goal pos:', goal_pos)
             self.follower_arms[name].write("Goal_Position", goal_pos)
             self.logs[f"write_follower_{name}_goal_pos_dt_s"] = time.perf_counter() - before_fwrite_t
 

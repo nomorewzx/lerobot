@@ -231,8 +231,12 @@ def control_loop(
         device = get_safe_torch_device(device)
 
     timestamp = 0
+    cnt = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
+        if cnt > 1000:
+            break
+        print(f'{cnt}th teleoperation.....................................')
         start_loop_t = time.perf_counter()
 
         if teleoperate:
@@ -268,6 +272,8 @@ def control_loop(
         if events["exit_early"]:
             events["exit_early"] = False
             break
+
+        cnt += 1
 
 
 def reset_environment(robot, events, reset_time_s):

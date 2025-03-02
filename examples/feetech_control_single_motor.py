@@ -1,46 +1,31 @@
-from lerobot.common.robot_devices.motors import feetech_motor_pingti
+from lerobot.common.robot_devices.motors import feetech_motor_group
 import time
 
+from lerobot.common.robot_devices.motors.configs import FeetechMotorGroupsBusConfig
 port_number = '/dev/tty.usbmodem58A60699971'
 
 motor_model = 'sts3215'
 
-MOTOR_ID = 1
+PRIMARY_ID = 6
 
+motor_groups={"gripper_moving": [(PRIMARY_ID, motor_model)]}
+cfg = FeetechMotorGroupsBusConfig(port=port_number, motors=motor_groups)
 
-motor_groups={"shoulder_lit": [(MOTOR_ID, motor_model)]}
+dual_motor_joint_bus = feetech_motor_group.FeetechMotorGroupsBus(config=cfg)
 
-dual_motor_joint_bus = feetech_motor_pingti.FeetechMotorsBusV2(port=port_number, motor_groups=motor_groups)
 dual_motor_joint_bus.connect()
 
-present_position = dual_motor_joint_bus.read_with_motor_ids([motor_model], [MOTOR_ID], 'Present_Position')
+primary_present_position = dual_motor_joint_bus.read_with_motor_ids([motor_model], [PRIMARY_ID], 'Present_Position')
 
-print('Motor position:')
-print(present_position)
+abs_pos = 2048
 
-delta_position = 2000
+dual_motor_joint_bus.write_with_motor_ids([motor_model], [PRIMARY_ID], "Goal_Position", [abs_pos])
 
-target_position = present_position[0] + delta_position
+# dual_motor_joint_bus.write_with_motor_ids([motor_model], [PRIMARY_ID], "P_Coefficient", [10])
 
-if (target_position > 4095) or (target_position < 0):
-    err_msg = f"Delta position out of scope [-2048, 2048], current primary servo poistion is {present_position}, delta position is {delta_position}"
-    raise Exception(err_msg)
+# dual_motor_joint_bus.write_with_motor_ids([motor_model], [PRIMARY_ID], "Minimum_Startup_Force", [6])
 
+# dual_motor_joint_bus.write_with_motor_ids([motor_model], [PRIMARY_ID], "Goal_Position", [2048])
 
-# set position to 2048
-# dual_motor_joint_bus.write_with_motor_ids([motor_model], [MOTOR_ID], "Goal_Position", [1024])
-
-dual_motor_joint_bus.write_with_motor_ids([motor_model], [MOTOR_ID], "Goal_Position", [target_position])
-import time
-
-time.sleep(1)
-print('=========================')
-new_position = dual_motor_joint_bus.read_with_motor_ids([motor_model], [MOTOR_ID], 'Present_Position')
-
-print('Motor position:')
-print(new_position)
-
-print('+++++++')
-mini_start_forces = dual_motor_joint_bus.read_with_motor_ids([motor_model], [MOTOR_ID], 'Minimum_Startup_Force')
-print('Mini Start Force', mini_start_forces)
-
+print('Primary Motor position:')
+print(primary_present_position)
