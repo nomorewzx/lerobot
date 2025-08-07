@@ -1,0 +1,255 @@
+# Asynchronous Episode Saving
+
+The LeRobot framework now supports asynchronous episode saving, which allows for non-blocking dataset recording by processing episode saves in a background thread. This feature significantly improves the recording experience by preventing the main recording loop from being blocked by time-consuming save operations.
+
+## Overview
+
+During dataset recording, episodes are typically saved immediately after completion, which can cause delays in the recording loop. The asynchronous saving feature addresses this by:
+
+1. **Non-blocking saves**: Episode saves are processed in a dedicated background thread
+2. **Queue management**: Multiple episodes can be queued for saving
+3. **Error handling**: Robust error handling with fallback to synchronous saving
+4. **Status monitoring**: Real-time status tracking of save operations
+5. **Graceful shutdown**: Proper cleanup and completion waiting
+
+## Benefits
+
+- **Smoother recording experience**: No interruptions during episode transitions
+- **Better timing consistency**: Maintains consistent FPS during recording
+- **Improved user experience**: Reduced waiting times between episodes
+- **Robust error handling**: Automatic fallback to synchronous saving if needed
+- **Resource management**: Configurable queue sizes and timeouts
+
+## Usage
+
+### Command Line Interface
+
+Enable async saving using the `--dataset.async_saving=true` flag:
+
+```bash
+python -m lerobot.record \
+    --robot.type=so100_follower \
+    --robot.port=/dev/tty.usbmodem123456789 \
+    --dataset.repo_id=your_username/async_demo \
+    --dataset.num_episodes=10 \
+    --dataset.async_saving=true \
+    --dataset.async_save_queue_size=5 \
+    --dataset.async_save_timeout=300.0
+```
+
+### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `async_saving` | `false` | Enable asynchronous episode saving |
+| `async_save_queue_size` | `10` | Maximum number of pending save tasks |
+| `async_save_timeout` | `300.0` | Timeout for individual save operations (seconds) |
+
+### Programmatic Usage
+
+```python
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+# Create dataset
+dataset = LeRobotDataset.create(
+    repo_id="your_username/demo",
+    fps=30,
+    features=features,
+    robot_type=robot.name,
+    use_videos=True,
+)
+
+# Enable async saving
+dataset.enable_async_saving(
+    max_queue_size=5,
+    save_timeout=180.0
+)
+
+# During recording loop
+for episode in range(num_episodes):
+    # Record episode...
+    
+    # Save asynchronously
+    success = dataset.save_episode_async()
+    if not success:
+        # Fallback to synchronous saving
+        dataset.save_episode()
+    
+    # Continue immediately without waiting
+
+# Wait for completion at the end
+dataset.wait_for_async_saves(timeout=60.0)
+
+# Get results
+results = dataset.get_async_save_results()
+for result in results:
+    if not result["success"]:
+        print(f"Episode {result['episode_index']} failed: {result['error_message']}")
+
+# Cleanup
+dataset.disable_async_saving(wait_for_completion=True)
+```
+
+## API Reference
+
+### LeRobotDataset Methods
+
+#### `enable_async_saving(max_queue_size=10, save_timeout=300.0)`
+
+Enable asynchronous episode saving.
+
+**Parameters:**
+- `max_queue_size` (int): Maximum number of pending save tasks
+- `save_timeout` (float): Timeout for individual save operations (seconds)
+
+#### `save_episode_async(episode_buffer=None) -> bool`
+
+Save an episode asynchronously without blocking the main thread.
+
+**Parameters:**
+- `episode_buffer` (dict, optional): Episode buffer to save. If None, uses current buffer.
+
+**Returns:**
+- `bool`: True if successfully queued, False otherwise
+
+#### `get_async_save_status() -> dict`
+
+Get current status of asynchronous saving.
+
+**Returns:**
+- `dict`: Status information including queue size, completion counts, etc.
+
+#### `wait_for_async_saves(timeout=None) -> bool`
+
+Wait for all pending async saves to complete.
+
+**Parameters:**
+- `timeout` (float, optional): Maximum time to wait (None = wait indefinitely)
+
+**Returns:**
+- `bool`: True if all saves completed, False if timeout occurred
+
+#### `get_async_save_results() -> list`
+
+Get results from completed async saves.
+
+**Returns:**
+- `list`: List of save result dictionaries
+
+#### `disable_async_saving(wait_for_completion=True, timeout=None)`
+
+Disable asynchronous episode saving.
+
+**Parameters:**
+- `wait_for_completion` (bool): Whether to wait for pending tasks
+- `timeout` (float, optional): Maximum time to wait for completion
+
+## Status Monitoring
+
+The async saver provides detailed status information:
+
+```python
+status = dataset.get_async_save_status()
+print(f"Async saving enabled: {status['async_saving_enabled']}")
+print(f"Total submitted: {status['total_submitted']}")
+print(f"Total completed: {status['total_completed']}")
+print(f"Total failed: {status['total_failed']}")
+print(f"Queue size: {status['queue_size']}")
+print(f"Pending tasks: {status['pending_tasks']}")
+print(f"Worker alive: {status['worker_alive']}")
+```
+
+## Error Handling
+
+The async saver includes robust error handling:
+
+1. **Queue full**: If the save queue is full, the system falls back to synchronous saving
+2. **Save failures**: Individual save failures are logged and tracked
+3. **Worker errors**: Unexpected worker thread errors are caught and reported
+4. **Timeout handling**: Configurable timeouts prevent indefinite waiting
+
+## Best Practices
+
+### Queue Size Configuration
+
+- **Small datasets** (< 10 episodes): Queue size of 3-5 is sufficient
+- **Large datasets** (> 50 episodes): Queue size of 10-20 may be beneficial
+- **High FPS recording**: Larger queue sizes help maintain smooth recording
+
+### Timeout Settings
+
+- **Fast saves** (simple episodes): 60-120 seconds timeout
+- **Complex saves** (video encoding): 300-600 seconds timeout
+- **Network uploads**: Consider longer timeouts for remote storage
+
+### Monitoring
+
+```python
+# Monitor during recording
+while recording:
+    status = dataset.get_async_save_status()
+    if status['queue_size'] > status['max_queue_size'] * 0.8:
+        logging.warning("Save queue is getting full")
+    
+    if status['total_failed'] > 0:
+        logging.error(f"Some saves failed: {status['last_error']}")
+```
+
+## Example: Complete Recording Script
+
+See `examples/async_recording_example.py` for a complete example demonstrating:
+
+- Async saving setup and configuration
+- Status monitoring during recording
+- Error handling and fallback mechanisms
+- Graceful shutdown and cleanup
+- Result analysis and reporting
+
+## Performance Considerations
+
+### Memory Usage
+
+- Each queued episode consumes memory until saved
+- Monitor queue size to prevent excessive memory usage
+- Consider system memory when setting queue size
+
+### CPU Usage
+
+- Background saving uses additional CPU resources
+- Video encoding operations are CPU-intensive
+- Balance between recording FPS and save performance
+
+### Disk I/O
+
+- Async saving may increase disk I/O contention
+- Consider using SSDs for better performance
+- Monitor disk space during long recording sessions
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Queue full errors**: Increase `async_save_queue_size` or reduce recording FPS
+2. **Timeout errors**: Increase `async_save_timeout` or optimize save operations
+3. **Worker thread crashes**: Check system resources and error logs
+4. **Memory issues**: Reduce queue size or episode complexity
+
+### Debug Information
+
+Enable debug logging to get detailed information:
+
+```python
+import logging
+logging.getLogger('lerobot.datasets.async_episode_saver').setLevel(logging.DEBUG)
+```
+
+### Fallback Strategy
+
+The system automatically falls back to synchronous saving if:
+
+- Async saving is not enabled
+- Save queue is full
+- Worker thread is not available
+- Save operation times out
+
+This ensures recording can continue even if async saving encounters issues. 

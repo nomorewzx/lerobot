@@ -18,6 +18,7 @@ import logging
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import datasets
 import numpy as np
@@ -72,6 +73,8 @@ from lerobot.datasets.video_utils import (
     get_safe_default_codec,
     get_video_info,
 )
+from lerobot.datasets.async_episode_saver import AsyncEpisodeSaver
+from lerobot.datasets.lockfree_async_episode_saver import LockFreeAsyncEpisodeSaver
 
 CODEBASE_VERSION = "v2.1"
 
@@ -461,6 +464,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Unused attributes
         self.image_writer = None
         self.episode_buffer = None
+        
+        # Async saving support
+        self._async_saver: Optional[AsyncEpisodeSaver] = None
+        self._lockfree_async_saver: Optional[LockFreeAsyncEpisodeSaver] = None
+        self._use_async_saving = False
+        self._use_lockfree_async_saving = False
 
         self.root.mkdir(exist_ok=True, parents=True)
 
@@ -1047,6 +1056,240 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj.episode_data_index = None
         obj.video_backend = video_backend if video_backend is not None else get_safe_default_codec()
         return obj
+
+    def enable_async_saving(self, max_queue_size: int = 10, save_timeout: float = 300.0) -> None:
+        """
+        Enable asynchronous episode saving.
+        
+        This method initializes the AsyncEpisodeSaver to handle episode saving
+        in a separate thread, which prevents blocking the main recording loop.
+        
+        Args:
+            max_queue_size: Maximum number of pending save tasks in the queue
+            save_timeout: Timeout for individual save operations (seconds)
+        """
+        if self._async_saver is not None:
+            logging.warning("Async saving is already enabled")
+            return
+            
+        self._async_saver = AsyncEpisodeSaver(
+            dataset=self,
+            max_queue_size=max_queue_size,
+            save_timeout=save_timeout
+        )
+        self._use_async_saving = True
+        logging.info("Async episode saving enabled")
+    
+    def disable_async_saving(self, wait_for_completion: bool = True, timeout: Optional[float] = None) -> None:
+        """
+        Disable asynchronous episode saving.
+        
+        Args:
+            wait_for_completion: Whether to wait for pending tasks to complete
+            timeout: Maximum time to wait for completion
+        """
+        if self._async_saver is None:
+            return
+            
+        self._async_saver.stop(wait=wait_for_completion, timeout=timeout)
+        self._async_saver = None
+        self._use_async_saving = False
+        logging.info("Async episode saving disabled")
+    
+    def save_episode_async(self, episode_buffer: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Save an episode asynchronously without blocking the main thread.
+        
+        This method submits the episode for saving in a background thread,
+        allowing the main recording loop to continue immediately.
+        
+        Args:
+            episode_buffer: The episode buffer to save. If None, uses the current episode_buffer.
+            
+        Returns:
+            True if the episode was successfully queued for saving, False otherwise.
+        """
+        if not self._use_async_saving or self._async_saver is None:
+            logging.warning("Async saving is not enabled, falling back to synchronous saving")
+            self.save_episode(episode_buffer)
+            return True
+        
+        # Use current episode buffer if none provided
+        if episode_buffer is None:
+            episode_buffer = self.episode_buffer.copy()
+        
+        # Get the episode index
+        episode_index = episode_buffer.get("episode_index", self.meta.total_episodes)
+        
+        # Submit for async saving
+        success = self._async_saver.submit_episode(episode_buffer, episode_index)
+        
+        if success:
+            # Reset the buffer for the next episode
+            self.episode_buffer = self.create_episode_buffer()
+        
+        return success
+    
+    def get_async_save_status(self) -> Dict[str, Any]:
+        """
+        Get the current status of asynchronous saving.
+        
+        Returns:
+            Dictionary with status information including queue size, completion counts, etc.
+        """
+        if self._async_saver is None:
+            return {"async_saving_enabled": False}
+        
+        status = self._async_saver.get_status()
+        status["async_saving_enabled"] = True
+        return status
+    
+    def wait_for_async_saves(self, timeout: Optional[float] = None) -> bool:
+        """
+        Wait for all pending async saves to complete.
+        
+        Args:
+            timeout: Maximum time to wait (None = wait indefinitely)
+            
+        Returns:
+            True if all saves completed, False if timeout occurred
+        """
+        if self._async_saver is None:
+            return True
+        
+        return self._async_saver.wait_for_completion(timeout=timeout)
+    
+    def get_async_save_results(self) -> List[Dict[str, Any]]:
+        """
+        Get results from completed async saves.
+        
+        Returns:
+            List of save result dictionaries
+        """
+        if self._async_saver is None:
+            return []
+        
+        results = self._async_saver.get_results()
+        return [{"episode_index": r.episode_index, "success": r.success, 
+                "error_message": r.error_message, "save_time": r.save_time} for r in results]
+
+    def enable_lockfree_async_saving(self, max_queue_size: int = 10, save_timeout: float = 300.0) -> None:
+        """
+        Enable lock-free asynchronous episode saving.
+        
+        This method initializes the LockFreeAsyncEpisodeSaver to handle episode saving
+        in a separate thread using lock-free data structures, which provides better
+        performance and avoids blocking the main recording loop.
+        
+        Args:
+            max_queue_size: Maximum number of pending save tasks in the queue
+            save_timeout: Timeout for individual save operations (seconds)
+        """
+        if self._lockfree_async_saver is not None:
+            logging.warning("Lock-free async saving is already enabled")
+            return
+            
+        self._lockfree_async_saver = LockFreeAsyncEpisodeSaver(
+            dataset=self,
+            max_queue_size=max_queue_size,
+            save_timeout=save_timeout
+        )
+        self._use_lockfree_async_saving = True
+        logging.info("Lock-free async episode saving enabled")
+    
+    def disable_lockfree_async_saving(self, wait_for_completion: bool = True, timeout: Optional[float] = None) -> None:
+        """
+        Disable lock-free asynchronous episode saving.
+        
+        Args:
+            wait_for_completion: Whether to wait for pending tasks to complete
+            timeout: Maximum time to wait for completion
+        """
+        if self._lockfree_async_saver is None:
+            return
+            
+        self._lockfree_async_saver.stop(wait=wait_for_completion, timeout=timeout)
+        self._lockfree_async_saver = None
+        self._use_lockfree_async_saving = False
+        logging.info("Lock-free async episode saving disabled")
+    
+    def save_episode_lockfree_async(self, episode_buffer: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Save an episode using lock-free asynchronous saving without blocking the main thread.
+        
+        This method submits the episode for saving in a background thread using
+        lock-free data structures, providing better performance than the regular
+        async saving method.
+        
+        Args:
+            episode_buffer: The episode buffer to save. If None, uses the current episode_buffer.
+            
+        Returns:
+            True if the episode was successfully queued for saving, False otherwise.
+        """
+        if not self._use_lockfree_async_saving or self._lockfree_async_saver is None:
+            logging.warning("Lock-free async saving is not enabled, falling back to synchronous saving")
+            self.save_episode(episode_buffer)
+            return True
+        
+        # Use current episode buffer if none provided
+        if episode_buffer is None:
+            episode_buffer = self.episode_buffer.copy()
+        
+        # Get the episode index
+        episode_index = episode_buffer.get("episode_index", self.meta.total_episodes)
+        
+        # Submit for lock-free async saving
+        success = self._lockfree_async_saver.submit_episode(episode_buffer, episode_index)
+        
+        if success:
+            # Reset the buffer for the next episode
+            self.episode_buffer = self.create_episode_buffer()
+        
+        return success
+    
+    def get_lockfree_async_save_status(self) -> Dict[str, Any]:
+        """
+        Get the current status of lock-free asynchronous saving.
+        
+        Returns:
+            Dictionary with status information including queue size, completion counts, etc.
+        """
+        if self._lockfree_async_saver is None:
+            return {"lockfree_async_saving_enabled": False}
+        
+        status = self._lockfree_async_saver.get_status()
+        status["lockfree_async_saving_enabled"] = True
+        return status
+    
+    def wait_for_lockfree_async_saves(self, timeout: Optional[float] = None) -> bool:
+        """
+        Wait for all pending lock-free async saves to complete.
+        
+        Args:
+            timeout: Maximum time to wait (None = wait indefinitely)
+            
+        Returns:
+            True if all saves completed, False if timeout occurred
+        """
+        if self._lockfree_async_saver is None:
+            return True
+        
+        return self._lockfree_async_saver.wait_for_completion(timeout=timeout)
+    
+    def get_lockfree_async_save_results(self) -> List[Dict[str, Any]]:
+        """
+        Get results from completed lock-free async saves.
+        
+        Returns:
+            List of save result dictionaries
+        """
+        if self._lockfree_async_saver is None:
+            return []
+        
+        results = self._lockfree_async_saver.get_results()
+        return [{"task_id": r.task_id, "episode_index": r.episode_index, "success": r.success, 
+                "error_message": r.error_message, "save_time": r.save_time} for r in results]
 
 
 class MultiLeRobotDataset(torch.utils.data.Dataset):

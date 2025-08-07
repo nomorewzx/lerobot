@@ -149,6 +149,13 @@ class DatasetRecordConfig:
     # Number of episodes to record before batch encoding videos
     # Set to 1 for immediate encoding (default behavior), or higher for batched encoding
     video_encoding_batch_size: int = 1
+    # Enable asynchronous episode saving to prevent blocking the main recording loop
+    # When enabled, episodes are saved in a background thread
+    async_saving: bool = False
+    # Maximum number of pending save tasks in the async save queue
+    async_save_queue_size: int = 10
+    # Timeout for individual async save operations (seconds)
+    async_save_timeout: float = 300.0
 
     def __post_init__(self):
         if self.single_task is None:
@@ -329,6 +336,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     # Load pretrained policy
     policy = None if cfg.policy is None else make_policy(cfg.policy, ds_meta=dataset.meta)
 
+    # Enable async saving if configured
+    if cfg.dataset.async_saving:
+        dataset.enable_async_saving(
+            max_queue_size=cfg.dataset.async_save_queue_size,
+            save_timeout=cfg.dataset.async_save_timeout
+        )
+        logging.info("Async episode saving enabled")
+
     robot.connect()
     if teleop is not None:
         teleop.connect()
@@ -374,10 +389,37 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 dataset.clear_episode_buffer()
                 continue
 
-            dataset.save_episode()
+            # Save episode (async if enabled, sync otherwise)
+            if cfg.dataset.async_saving:
+                success = dataset.save_episode_async()
+                if not success:
+                    logging.warning(f"Failed to queue episode {recorded_episodes} for async saving, falling back to sync")
+                    dataset.save_episode()
+            else:
+                dataset.save_episode()
+            
             recorded_episodes += 1
 
     log_say("Stop recording", cfg.play_sounds, blocking=True)
+
+    # Wait for all async saves to complete if enabled
+    if cfg.dataset.async_saving:
+        logging.info("Waiting for async episode saves to complete...")
+        success = dataset.wait_for_async_saves(timeout=60.0)  # Wait up to 60 seconds
+        if not success:
+            logging.warning("Timeout waiting for async saves to complete")
+        else:
+            logging.info("All async episode saves completed")
+        
+        # Get and log save results
+        results = dataset.get_async_save_results()
+        if results:
+            successful_saves = sum(1 for r in results if r["success"])
+            failed_saves = len(results) - successful_saves
+            logging.info(f"Async save results: {successful_saves} successful, {failed_saves} failed")
+        
+        # Disable async saving
+        dataset.disable_async_saving(wait_for_completion=True, timeout=30.0)
 
     robot.disconnect()
     if teleop is not None:

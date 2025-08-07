@@ -1,0 +1,240 @@
+# HF 数据集的线程安全问题与解决方案
+
+## 问题背景
+
+在异步 episode 保存的实现中，发现了一个严重的线程安全问题：`_save_episode_table` 方法会修改共享的 `self.hf_dataset` 变量，导致多个异步保存线程之间的数据竞争。
+
+## 问题分析
+
+### 1. 原始实现的问题
+
+```python
+def _save_episode_table(self, episode_buffer: dict, episode_index: int) -> None:
+    # 创建 episode 数据集
+    episode_dict = {key: episode_buffer[key] for key in self.hf_features}
+    ep_dataset = datasets.Dataset.from_dict(episode_dict, features=self.hf_features, split="train")
+    ep_dataset = embed_images(ep_dataset)
+    
+    # 🚨 问题：修改共享状态 self.hf_dataset
+    self.hf_dataset = concatenate_datasets([self.hf_dataset, ep_dataset])
+    self.hf_dataset.set_transform(hf_transform_to_torch)
+    
+    # 保存到文件
+    ep_data_path = self.root / self.meta.get_data_file_path(ep_index=episode_index)
+    ep_dataset.to_parquet(ep_data_path)
+```
+
+### 2. 线程竞争场景
+
+```python
+# 时间线示例：
+# T1: 异步线程A调用 _save_episode_table(episode_0)
+#     - 读取 self.hf_dataset (包含 episodes 0-2)
+#     - 创建新的 ep_dataset
+#     - 准备合并
+
+# T2: 异步线程B调用 _save_episode_table(episode_1) 
+#     - 读取 self.hf_dataset (仍然包含 episodes 0-2)
+#     - 创建新的 ep_dataset
+#     - 准备合并
+
+# T3: 线程A执行合并
+#     - self.hf_dataset = concatenate_datasets([old_dataset, ep_dataset])
+#     - 现在包含 episodes 0-3
+
+# T4: 线程B执行合并
+#     - self.hf_dataset = concatenate_datasets([old_dataset, ep_dataset])
+#     - 🚨 丢失了线程A的更新！现在只包含 episodes 0-2 + episode_1
+```
+
+### 3. `hf_transform_to_torch` 的影响
+
+`hf_transform_to_torch` 是一个转换函数，它会影响整个数据集的行为：
+
+```python
+def hf_transform_to_torch(items_dict: dict[torch.Tensor | None]):
+    # 将 HuggingFace 数据集转换为 PyTorch 格式
+    # 这个转换会影响整个数据集的行为
+```
+
+## 解决方案
+
+### 方案1：完全隔离保存（推荐）
+
+在异步保存中，只保存 episode 到文件，不修改共享的 `self.hf_dataset`：
+
+```python
+def _save_episode_table_isolated(self, save_dataset: LeRobotDataset, episode_buffer: Dict[str, Any], episode_index: int) -> None:
+    """线程安全的 episode 表保存"""
+    
+    # 创建 episode 数据集
+    episode_dict = {key: episode_buffer[key] for key in save_dataset.hf_features}
+    ep_dataset = datasets.Dataset.from_dict(episode_dict, features=save_dataset.hf_features, split="train")
+    ep_dataset = embed_images(ep_dataset)
+    
+    # 🚨 关键修改：只保存 episode 到文件，不修改任何共享状态
+    # 这样可以完全避免线程竞争问题
+    
+    # 保存到 parquet 文件（只保存当前 episode）
+    ep_data_path = save_dataset.root / save_dataset.meta.get_data_file_path(ep_index=episode_index)
+    ep_data_path.parent.mkdir(parents=True, exist_ok=True)
+    ep_dataset.to_parquet(ep_data_path)
+    
+    # 注意：我们不在这里合并到 hf_dataset
+    # 合并操作将在主线程中安全地进行，或者通过其他机制处理
+```
+
+### 方案2：延迟合并
+
+将 HF 数据集的合并操作延迟到主线程中安全地进行：
+
+```python
+def _merge_save_results(self, save_dataset: LeRobotDataset, episode_index: int) -> None:
+    """合并保存结果到主数据集"""
+    
+    with self.dataset._merge_lock:
+        # 合并元数据更改（episodes, tasks, stats 等）
+        self._merge_metadata_changes(save_dataset)
+        
+        # 🚨 关键修改：不在这里合并 HF 数据集
+        # HF 数据集的合并将在主线程中安全地进行
+        # 这样可以完全避免线程竞争问题
+```
+
+### 方案3：主线程重新加载
+
+在主线程中重新加载 HF 数据集以确保一致性：
+
+```python
+def refresh_hf_dataset(self) -> None:
+    """在主线程中安全地重新加载 HF 数据集"""
+    
+    # 重新加载所有 parquet 文件
+    self.hf_dataset = self.load_hf_dataset()
+    
+    # 应用转换
+    from lerobot.datasets.utils import hf_transform_to_torch
+    self.hf_dataset.set_transform(hf_transform_to_torch)
+```
+
+## 实现细节
+
+### 1. 文件级隔离
+
+每个 episode 保存到独立的 parquet 文件：
+
+```
+dataset_root/
+├── data/
+│   ├── chunk-000/
+│   │   ├── episode_000000.parquet  # Episode 0
+│   │   ├── episode_000001.parquet  # Episode 1
+│   │   └── episode_000002.parquet  # Episode 2
+│   └── ...
+```
+
+### 2. 元数据合并
+
+只合并元数据，不合并 HF 数据集：
+
+```python
+def _merge_metadata_changes(self, save_dataset: LeRobotDataset) -> None:
+    """合并元数据更改"""
+    
+    # 合并新任务
+    for task, task_index in save_dataset.meta.task_to_task_index.items():
+        if task not in self.dataset.meta.task_to_task_index:
+            self.dataset.meta.task_to_task_index[task] = task_index
+            self.dataset.meta.tasks[task_index] = task
+    
+    # 合并 episode 信息
+    if hasattr(save_dataset.meta, 'episodes') and save_dataset.meta.episodes:
+        for ep_idx, ep_info in save_dataset.meta.episodes.items():
+            if ep_idx not in self.dataset.meta.episodes:
+                self.dataset.meta.episodes[ep_idx] = ep_info
+    
+    # 更新总数
+    self.dataset.meta.info["total_episodes"] = save_dataset.meta.info["total_episodes"]
+    self.dataset.meta.info["total_frames"] = save_dataset.meta.info["total_frames"]
+    self.dataset.meta.info["total_tasks"] = save_dataset.meta.info["total_tasks"]
+```
+
+### 3. 主线程处理
+
+在主线程中处理 HF 数据集的更新：
+
+```python
+# 在录制循环结束后
+def wait_for_async_saves(self, timeout: Optional[float] = None) -> bool:
+    """等待异步保存完成"""
+    
+    success = self._async_saver.wait_for_completion(timeout=timeout)
+    
+    if success:
+        # 🚨 在主线程中安全地重新加载 HF 数据集
+        self.refresh_hf_dataset()
+    
+    return success
+```
+
+## 优势
+
+### 1. 完全避免线程竞争
+
+- 异步保存线程不修改共享的 `self.hf_dataset`
+- 每个 episode 保存到独立的文件
+- 元数据合并使用锁保护
+
+### 2. 更好的性能
+
+- 异步保存线程可以完全并行
+- 文件写入是原子的
+- 主线程只在需要时重新加载数据集
+
+### 3. 更好的容错性
+
+- 单个 episode 保存失败不影响其他 episode
+- 可以部分重新加载数据集
+- 支持增量更新
+
+### 4. 更简单的调试
+
+- 每个 episode 有独立的文件
+- 可以单独检查每个 episode 的数据
+- 错误更容易定位
+
+## 使用建议
+
+### 1. 定期刷新数据集
+
+```python
+# 在录制过程中定期刷新
+if episode_count % 10 == 0:  # 每10个episode刷新一次
+    dataset.refresh_hf_dataset()
+```
+
+### 2. 录制结束后刷新
+
+```python
+# 录制结束后确保数据集是最新的
+dataset.wait_for_async_saves(timeout=60.0)
+dataset.refresh_hf_dataset()
+```
+
+### 3. 监控文件状态
+
+```python
+# 检查保存的文件
+episode_files = list(dataset.root.glob("data/**/*.parquet"))
+print(f"Total episode files: {len(episode_files)}")
+```
+
+## 总结
+
+通过将 HF 数据集的修改操作从异步线程中移除，我们完全避免了线程竞争问题。这种设计既保证了数据一致性，又维持了良好的性能，为用户提供了可靠的异步保存功能。
+
+关键原则：
+1. **异步线程只负责文件 I/O**：保存 episode 到独立的 parquet 文件
+2. **主线程负责数据集管理**：在需要时重新加载和合并数据集
+3. **元数据使用锁保护**：确保元数据更新的原子性
+4. **文件级隔离**：每个 episode 独立存储，避免文件级竞争 
